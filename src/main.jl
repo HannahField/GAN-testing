@@ -1,15 +1,17 @@
 using Flux
 using FileIO
 using Images
+using Zygote
 
 
 ## IMPORT DATA
 
 function importPictureData()
 
-    basePath = "./Data/T0/"
+    basePath = "./Data/"
+    subFolderPath = string("T",rand(1:6),"/")
     digit = rand(30:39)
-    currentPath = string(basePath, digit, "/")
+    currentPath = string(basePath,subFolderPath, digit, "/")
     digits = readdir(currentPath)
     chosenPicture = rand(digits)
     picturePath = string(currentPath, chosenPicture)
@@ -23,77 +25,76 @@ end
 
 batchSize = 128
 
-w1 = randn(Float32, 1024, 64 * 64)|> gpu
-b1 = randn(Float32, 1024)|> gpu
-w2 = randn(Float32, 256, 1024)|> gpu
-b2 = randn(Float32, 256)|> gpu
-w3 = randn(Float32, 64, 256)|> gpu
-b3 = randn(Float32, 64)|> gpu
-w4 = randn(Float32, 1, 64)|> gpu
-b4 = randn(Float32, 1)|> gpu
+discriminator = Chain(
+    Flux.Dense(64*64 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(1024 => 256, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(256 => 64, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(64 => 1, Flux.sigmoid, bias=true, init=Flux.glorot_normal),
+) |> gpu
 
-
-discriminator = Flux.Chain(
-    Flux.Dense(w1, b1, Flux.tanh),
-    Flux.Dense(w2, b2, Flux.tanh),
-    Flux.Dense(w3, b3, Flux.tanh),
-    Flux.Dense(w4, b4, Flux.tanh),
+generator = Chain(
+    Flux.Dense(128 => 256, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(256 => 512, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(512 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(1024 => 4096, Flux.sigmoid, bias=true, init=Flux.glorot_normal),
 ) |> gpu
 
 
-w1 = randn(Float32, 256, 128) |> gpu
-b1 = randn(Float32, 256)|> gpu
-w2 = randn(Float32, 512, 256)|> gpu
-b2 = randn(Float32, 512)|> gpu
-w3 = randn(Float32, 1024, 512)|> gpu
-b3 = randn(Float32, 1024)|> gpu
-w4 = randn(Float32, 64 * 64, 1024)|> gpu
-b4 = randn(Float32, 64 * 64)|> gpu
-
-generator = Flux.Chain(
-    Flux.Dense(w1, b1, Flux.tanh),
-    Flux.Dense(w2, b2, Flux.tanh),
-    Flux.Dense(w3, b3, Flux.tanh),
-    Flux.Dense(w4, b4, Flux.tanh),
-) |> gpu
-
-
-opt = Descent()
-loss(x, y) = sum((x .- y) .^ 2) |> gpu
-
+opt = Flux.Adam(2e-4)
 
 function train_dscr!(discriminator,real_data,fake_data)
-    allData = vcat(real_data,fake_data) |> gpu
+    allData = (hcat(real_data,fake_data)) |> gpu
+    allTarget = permutedims([ones(Float32,128); zeros(Float32,128)]) |> gpu
 
     ps = Flux.params(discriminator)
 
-    for i = 1:256
-        currentData = [(allData[1+(i-1)*64*64:i*64*64],i<129 ? 1 : 0 )]|> gpu
-        Flux.train!(loss,ps,currentData,opt) |> gpu
+
+    loss, pullback = Zygote.pullback(ps) do
+        preds = discriminator(allData)
+        loss = Flux.Losses.mse(preds, allTarget)
     end
+
+    grads = pullback(1f0)
+    Flux.update!(opt,Flux.params(discriminator),grads)
+    return loss
 end
 
 
 function train_gen!(discriminator,generator)
-    noise = randn(Float32,128,batchSize)|> gpu
+    noise = rand(Float32,128,batchSize)|> gpu
     ps = Flux.params(generator)
-    for i = 1:128
-        currentData = [(discriminator(generator(noise[:,i])),1)] |> gpu
-        Flux.train!(loss,ps,currentData,opt)
-      end
+    
+    loss, pullback = Zygote.pullback(ps) do
+        preds = discriminator(generator(noise))
+        loss = Flux.Losses.mse(preds, 1.0)
+    end
+    grads = pullback(1.0)
+    Flux.update!(opt,Flux.params(generator),grads)
+    return loss
 end
 
 function train!(epoch,discriminator,generator)
+    lossVector = zeros(epoch,2)
     for n = 1:epoch
     
-        real_data = reshape(hcat(map(_ -> importPictureData(),1:128)...),128*64*64) |> gpu
-        #println(real_data)
-        noise = randn(Float32,128,batchSize)|> gpu
-        fake_data = reshape(generator(noise),128*64*64)
+        real_data = hcat(map(_ -> importPictureData(),1:128)...) |> gpu
+        noise = rand(Float32,128,batchSize) |> gpu
+        fake_data = generator(noise) 
 
-        train_dscr!(discriminator,real_data,fake_data)
+        loss_dscr = train_dscr!(discriminator,real_data,fake_data)
 
-        train_gen!(discriminator,generator)
-        println(n)
+        loss_gen = train_gen!(discriminator,generator)
+        println(string("Epoch:",n))
+        println(string("Loss for generator epoch",n,":",loss_gen))
+        lossVector[n,1] = loss_gen
+        println(string("Loss for discriminator epoch",n,":",loss_dscr))
+        lossVector[n,2] = loss_dscr        
     end
+    return lossVector
+end
+
+function toPicture(pixels,i) 
+    pixels = reshape(pixels,(64,64))
+    Gray.(pixels)
+    FileIO.save(string("test",i,".png"),pixels)
 end
