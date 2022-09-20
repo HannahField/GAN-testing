@@ -64,27 +64,27 @@ loss(x, y) = sum((x .- y) .^ 2) |> gpu
 
 function train_dscr!(discriminator,real_data,fake_data)
     allData = vcat(real_data,fake_data) |> gpu
-    allTarget = [ones(Float32,128,1) zeros(Float32,128,1)] |> gpu
-    
-    ps = Flux.params(discriminator)
-    #dump(allData)
-    #dump(allTarget)
-    data = [(allData,allTarget)] |> gpu
-    #dump(data)
 
-    Flux.train!(loss,ps,data,opt)
+    ps = Flux.params(discriminator)
+
+    for i = 1:256
+        currentData = [(allData[1+(i-1)*64*64:i*64*64],i<129 ? 1 : 0 )]|> gpu
+        Flux.train!(loss,ps,currentData,opt) |> gpu
+    end
 end
 
 
 function train_gen!(discriminator,generator)
     noise = randn(Float32,128,batchSize)|> gpu
     ps = Flux.params(generator)
-    data = [(discriminator(generator(noise)), ones(128))] |> gpu
-    Flux.@epochs 128 Flux.train!(loss,ps,data,opt)
+    for i = 1:128
+        currentData = [(discriminator(generator(noise[:,i])),1)] |> gpu
+        Flux.train!(loss,ps,currentData,opt)
+      end
 end
 
-#function train!(epoch,discriminator,generator)
-    #for n = 1:epoch
+function train!(epoch,discriminator,generator)
+    for n = 1:epoch
     
         real_data = reshape(hcat(map(_ -> importPictureData(),1:128)...),128*64*64) |> gpu
         #println(real_data)
@@ -94,6 +94,6 @@ end
         train_dscr!(discriminator,real_data,fake_data)
 
         train_gen!(discriminator,generator)
-        #println(n)
-    #end
-#end
+        println(n)
+    end
+end
