@@ -2,7 +2,7 @@ using Flux
 using FileIO
 using Images
 using Zygote
-
+using BSON
 
 ## IMPORT DATA
 
@@ -98,3 +98,9 @@ function toPicture(pixels,i)
     Gray.(pixels)
     FileIO.save(string("test",i,".png"),pixels)
 end
+function saveNetwork(discriminator,generator)
+    BSON.@save("discriminator.BSON",discriminator)
+    BSON.@save("generator.BSON",generator)
+end
+
+println(train!(1,discriminator,generator))
