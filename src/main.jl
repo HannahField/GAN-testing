@@ -1,6 +1,9 @@
+using Pkg
+Pkg.activate(".")
 using Flux
 using FileIO
 using Images
+using CUDA
 using Zygote
 using BSON
 
@@ -51,7 +54,7 @@ function train_dscr!(discriminator,real_data,fake_data)
 
     loss, pullback = Zygote.pullback(ps) do
         preds = discriminator(allData)
-        loss = Flux.Losses.mse(preds, allTarget)
+        loss = Flux.Losses.binarycrossentropy(preds, allTarget)
     end
 
     grads = pullback(1f0)
@@ -66,7 +69,7 @@ function train_gen!(discriminator,generator)
     
     loss, pullback = Zygote.pullback(ps) do
         preds = discriminator(generator(noise))
-        loss = Flux.Losses.mse(preds, 1.0)
+        loss = Flux.Losses.binarycrossentropy(preds, 1.0)
     end
     grads = pullback(1.0)
     Flux.update!(opt,Flux.params(generator),grads)
