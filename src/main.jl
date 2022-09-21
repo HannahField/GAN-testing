@@ -20,26 +20,27 @@ function importPictureData()
     picturePath = string(currentPath, chosenPicture)
     digit -= 30
     image = Gray.(FileIO.load(picturePath))
-    resizedImage = ImageTransformations.imresize(image, (64, 64), method=ImageTransformations.Linear())
-    pixels = convert.(Float64, resizedImage)
-    return reshape(pixels, 64 * 64)
+    resizedImage = ImageTransformations.imresize(image, (32, 32), method=ImageTransformations.Linear())
+    pixels = convert.(Float16, resizedImage)
+    pixels = (pixels.-0.5).*2
+    return reshape(pixels, 32 * 32)
 
 end
 
 batchSize = 128
 
 discriminator = Chain(
-    Flux.Dense(64*64 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
-    Flux.Dense(1024 => 256, Flux.tanh, bias=true, init=Flux.glorot_normal),
-    Flux.Dense(256 => 64, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(1024 => 512, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dense(512 => 256, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dense(256 => 64, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
     Flux.Dense(64 => 1, Flux.sigmoid, bias=true, init=Flux.glorot_normal),
 ) |> gpu
 
 generator = Chain(
-    Flux.Dense(128 => 256, Flux.tanh, bias=true, init=Flux.glorot_normal),
-    Flux.Dense(256 => 512, Flux.tanh, bias=true, init=Flux.glorot_normal),
-    Flux.Dense(512 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
-    Flux.Dense(1024 => 4096, Flux.sigmoid, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(128 => 256, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dense(256 => 512, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dense(512 => 1024, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dense(1024 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
 ) |> gpu
 
 
@@ -47,7 +48,7 @@ opt = Flux.Adam(2e-4)
 
 function train_dscr!(discriminator,real_data,fake_data)
     allData = (hcat(real_data,fake_data)) |> gpu
-    allTarget = permutedims([ones(Float32,128); zeros(Float32,128)]) |> gpu
+    allTarget = permutedims([ones(Float16,128); zeros(Float16,128)]) |> gpu
 
     ps = Flux.params(discriminator)
 
@@ -64,7 +65,7 @@ end
 
 
 function train_gen!(discriminator,generator)
-    noise = rand(Float32,128,batchSize)|> gpu
+    noise = randn(Float16,128,batchSize)|> gpu
     ps = Flux.params(generator)
     
     loss, pullback = Zygote.pullback(ps) do
@@ -81,7 +82,7 @@ function train!(epoch,discriminator,generator)
     for n = 1:epoch
     
         real_data = hcat(map(_ -> importPictureData(),1:128)...) |> gpu
-        noise = rand(Float32,128,batchSize) |> gpu
+        noise = randn(Float16,128,batchSize) |> gpu
         fake_data = generator(noise) 
 
         loss_dscr = train_dscr!(discriminator,real_data,fake_data)
@@ -97,7 +98,15 @@ function train!(epoch,discriminator,generator)
 end
 
 function toPicture(pixels,i) 
-    pixels = reshape(pixels,(64,64))
+    pixels = reshape(pixels,(32,32))
+    Gray.(pixels)
+    FileIO.save(string("test",i,".png"),pixels)
+end
+function generatePicture(i) 
+    noise = randn(Float16,128) |> gpu
+    pixels = Array(generator(noise))
+    pixels = reshape(pixels,(32,32))
+    pixels = (pixels)./2 .+ 0.5
     Gray.(pixels)
     FileIO.save(string("test",i,".png"),pixels)
 end
@@ -106,4 +115,4 @@ function saveNetwork(discriminator,generator)
     BSON.@save("generator.BSON",generator)
 end
 
-println(train!(1,discriminator,generator))
+#println(train!(1000,discriminator,generator))
