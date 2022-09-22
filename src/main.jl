@@ -13,7 +13,8 @@ function importPictureData()
 
     basePath = "./Data/"
     subFolderPath = string("T",rand(1:6),"/")
-    digit = rand(30:39)
+    #digit = rand(30:39)
+    digit = rand(30:34)
     currentPath = string(basePath,subFolderPath, digit, "/")
     digits = readdir(currentPath)
     chosenPicture = rand(digits)
@@ -28,19 +29,23 @@ function importPictureData()
 end
 
 batchSize = 128
+latent_space = 64
 
 discriminator = Chain(
     Flux.Dense(1024 => 512, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dropout(0.3),
     Flux.Dense(512 => 256, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dropout(0.3),
     Flux.Dense(256 => 64, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
+    Flux.Dropout(0.3),
     Flux.Dense(64 => 1, Flux.sigmoid, bias=true, init=Flux.glorot_normal),
 ) |> gpu
 
 generator = Chain(
+    Flux.Dense(latent_space => 128, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
     Flux.Dense(128 => 256, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
     Flux.Dense(256 => 512, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
-    Flux.Dense(512 => 1024, x -> Flux.leakyrelu(x, 0.2f0), bias=true, init=Flux.glorot_normal),
-    Flux.Dense(1024 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
+    Flux.Dense(512 => 1024, Flux.tanh, bias=true, init=Flux.glorot_normal),
 ) |> gpu
 
 
@@ -65,15 +70,16 @@ end
 
 
 function train_gen!(discriminator,generator)
-    noise = randn(Float16,128,batchSize)|> gpu
+    noise = randn(Float16,latent_space,batchSize)|> gpu
     ps = Flux.params(generator)
-    
+    testmode!(discriminator)
     loss, pullback = Zygote.pullback(ps) do
         preds = discriminator(generator(noise))
         loss = Flux.Losses.binarycrossentropy(preds, 1.0)
     end
     grads = pullback(1.0)
     Flux.update!(opt,Flux.params(generator),grads)
+    Flux.trainmode!(discriminator, :auto)
     return loss
 end
 
@@ -82,7 +88,7 @@ function train!(epoch,discriminator,generator)
     for n = 1:epoch
     
         real_data = hcat(map(_ -> importPictureData(),1:128)...) |> gpu
-        noise = randn(Float16,128,batchSize) |> gpu
+        noise = randn(Float16,latent_space,batchSize) |> gpu
         fake_data = generator(noise) 
 
         loss_dscr = train_dscr!(discriminator,real_data,fake_data)
@@ -103,7 +109,7 @@ function toPicture(pixels,i)
     FileIO.save(string("test",i,".png"),pixels)
 end
 function generatePicture(i) 
-    noise = randn(Float16,128) |> gpu
+    noise = randn(Float16,latent_space) |> gpu
     pixels = Array(generator(noise))
     pixels = reshape(pixels,(32,32))
     pixels = (pixels)./2 .+ 0.5
